@@ -1,0 +1,245 @@
+global:
+  image:
+    tag: "v2.5.8"
+
+dex:
+  extraArgs:
+   - --disable-tls
+
+configs:
+  cm:
+    exec.enabled: true
+    url: https://argocd.devops-flutterwave.com
+    oidc.config: |
+      name: JumpCloud
+      clientID: e5f847eb-aa42-4e4b-a7f0-ef1abe523805
+      clientSecret: $oidc.jumpcloud.clientSecret
+      issuer: https://oauth.id.jumpcloud.com/
+    resource.customizations: |
+      networking.k8s.io/Ingress:
+        health.lua: |
+          hs = {}
+          hs.status = "Healthy"
+          return hs
+
+  secret:
+    gitlabSecret: ${argocd-gitlab-webhook-secret}
+    extra:
+      oidc.jumpcloud.clientSecret: ${jumpcloud_clientsecret}
+    
+  rbac:
+    policy.default: 'role:readonly'
+    policy.csv: |
+      p, role:admin, exec, create, */*, allow
+      g, AWS_DevOps, role:admin
+      g, AWS_SecOps, role:readonly
+
+  credentialTemplates:
+    https-creds:
+      password: ${argocd_gat}
+      username: argocd
+
+  repositories:
+    flutterwave-charts:
+      url: https://gitlab.com/api/v4/projects/38906879/packages/helm/stable
+      name: flutterwave-charts
+      type: helm
+    app-manifests:
+      url: https://gitlab.com/Flutterwavego/devops/argocd.git
+      name: app-manifests
+      type: git
+
+redis-ha:
+  enabled: true
+
+controller:
+  replicas: 1
+
+server:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+  ingress:
+    enabled: true
+    ingressClassName: "nginx"
+    hosts:
+      - argocd.devops-flutterwave.com
+    https: true
+  extraArgs:
+    - --insecure
+
+repoServer:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+
+applicationSet:
+  replicaCount: 2
+
+
+notifications:
+  # -- Enable notifications controller
+  enabled: true
+  name: notifications-controller
+  argocdUrl: https://argocd.devops-flutterwave.com
+  image:
+    repository: ""
+    tag: ""
+  secret:
+    # -- Whether helm chart creates notifications controller secret
+    create: true
+  items:
+    slack-token: ${slack-token}
+
+  notifiers: 
+    service.slack: |
+      token: ${slack-token}
+
+  cm:
+    # -- Whether helm chart creates notifications controller config map
+    create: true
+
+  subscriptions:
+  # subscription for app degraded trigger notifications
+    - recipients:
+      - slack:a_argocd_deployments
+      triggers:
+      - on-deployed
+      - on-health-degraded
+      - on-health-progressing
+  
+  templates: 
+    template.app-deployed: |
+      message: |
+        {{if eq .serviceType "slack"}}:white_check_mark:{{end}} Application {{.app.metadata.name}} is now running new version of deployments manifests.
+      slack:
+        attachments: |
+          [{
+            "title": "{{ .app.metadata.name}}",
+            "title_link":"{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+            "color": "#18be52",
+            "fields": [
+            {
+              "title": "Sync Status",
+              "value": "{{.app.status.sync.status}}",
+              "short": true
+            },
+            {
+              "title": "Repository",
+              "value": "{{.app.spec.source.repoURL}}",
+              "short": true
+            },
+            {
+              "title": "Revision",
+              "value": "{{.app.status.sync.revision}}",
+              "short": true
+            }
+            {{range $index, $c := .app.status.conditions}}
+            {{if not $index}},{{end}}
+            {{if $index}},{{end}}
+            {
+              "title": "{{$c.type}}",
+              "value": "{{$c.message}}",
+              "short": true
+            }
+            {{end}}
+            ]
+          }]
+
+    template.app-health-degraded: |
+      message: |
+        {{if eq .serviceType "slack"}}:exclamation:{{end}} Application {{.app.metadata.name}} has degraded.
+        Application details: {{.context.argocdUrl}}/applications/{{.app.metadata.name}}.
+      slack:
+        attachments: |-
+          [{
+            "title": "{{ .app.metadata.name}}",
+            "title_link": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+            "color": "#d22b2b",
+            "fields": [
+            {
+              "title": "Sync Status",
+              "value": "{{.app.status.sync.status}}",
+              "short": true
+            },
+            {
+              "title": "Repository",
+              "value": "{{.app.spec.source.repoURL}}",
+              "short": true
+            },
+            {
+              "title": "Revision",
+              "value": "{{.app.status.sync.revision}}",
+              "short": true
+            }
+            {{range $index, $c := .app.status.conditions}}
+            {{if not $index}},{{end}}
+            {{if $index}},{{end}}
+            {
+              "title": "{{$c.type}}",
+              "value": "{{$c.message}}",
+              "short": true
+            }
+            {{end}}
+            ]
+          }]
+
+    template.app-health-progressing: |
+      message: |
+        The sync operation of application {{.app.metadata.name}} has started at {{.app.status.operationState.startedAt}}.
+        Sync operation details are available at: {{.context.argocdUrl}}/applications/{{.app.metadata.name}}?operation=true .
+      slack:
+        attachments: |-
+          [{
+            "title": "{{ .app.metadata.name}}",
+            "title_link": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+            "color": "#0dadea",
+            "fields": [
+            {
+              "title": "Sync Status",
+              "value": "{{.app.status.sync.status}}",
+              "short": true
+            },
+            {
+              "title": "Repository",
+              "value": "{{.app.spec.source.repoURL}}",
+              "short": true
+            },
+            {
+              "title": "Revision",
+              "value": "{{.app.status.sync.revision}}",
+              "short": true
+            }
+            {{range $index, $c := .app.status.conditions}}
+            {{if not $index}},{{end}}
+            {{if $index}},{{end}}
+            {
+              "title": "{{$c.type}}",
+              "value": "{{$c.message}}",
+              "short": true
+            }
+            {{end}}
+            ]
+          }]
+
+
+  triggers:
+    trigger.on-deployed: |
+      - description: Application is synced and healthy. Triggered once per commit.
+        oncePer: app.status.sync.revision
+        send:
+        - app-deployed
+        when: app.status.operationState.phase in ['Succeeded'] and app.status.health.status == 'Healthy'
+    trigger.on-health-degraded: |
+      - description: Application has degraded
+        send:
+        - app-health-degraded
+        when: app.status.health.status == 'Degraded'
+        oncePer: app.status.sync.revision
+    trigger.on-health-progressing: |
+      - description: Application is in progress
+        send:
+        - app-health-progressing
+        when: app.status.operationState.phase in ['Running'] and app.status.health.status == 'Progressing'
+        oncePer: app.status.sync.revision
+
